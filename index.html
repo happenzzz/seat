@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>4-1 자리배치 프로그램</title>
+<style>
+:root{
+  --bg:#f6f7fb; --line:#c9ceda;
+  --male:#d8e9ff; --female:#ffe2f1;
+  --bundang1:#e8f7e8; --bundang2:#fff7d9; --bundang3:#e9e5ff;
+  --desk-radius:26px;
+  --font:"Pretendard","Noto Sans KR",sans-serif;
+  --fs:clamp(13px,2.8vw,16px);
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;background:var(--bg);font-family:var(--font);font-size:var(--fs);color:#333;}
+h1{margin:10px 0 6px;text-align:center;font-size:1.25rem;}
+#app{max-width:1100px;margin:0 auto;padding:12px;}
+.controls{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:10px;}
+button{padding:8px 14px;border:1px solid #888;border-radius:10px;background:#fff;cursor:pointer;font-weight:600;}
+button:hover{background:#f0f0f0;}
+
+#admin.hidden{display:none;}
+fieldset{margin:8px 0;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:#fff;}
+legend{padding:0 6px;font-weight:600;}
+textarea{width:100%;min-height:70px;font-family:monospace;font-size:12px;}
+
+.stage{display:flex;gap:16px;justify-content:space-between;}
+.bundang{flex:1;padding:32px 14px 14px;border:3px solid var(--line);border-radius:18px;background:#fff;position:relative;}
+.bundang:nth-child(1){background:var(--bundang1);}
+.bundang:nth-child(2){background:var(--bundang2);}
+.bundang:nth-child(3){background:var(--bundang3);}
+.btitle{
+  position:absolute;top:-22px;left:50%;transform:translateX(-50%);
+  background:#0d5679;color:#fff;font-size:.85rem;font-weight:700;
+  padding:4px 16px;border-radius:8px;letter-spacing:.06em;
+  box-shadow:0 2px 4px rgba(0,0,0,.15);
+}
+.grid{display:grid;grid-template-columns:1fr;grid-auto-rows:minmax(78px,1fr);gap:14px;}
+.desk{display:flex;height:100%;border:3px solid #444;border-radius:var(--desk-radius);overflow:hidden;background:#fff;transition:transform .4s;}
+.seat{
+  flex:1;display:flex;align-items:center;justify-content:center;
+  padding:6px 4px;text-align:center;line-height:1.2;font-size:1rem;word-break:keep-all;
+  user-select:none;cursor:grab;
+}
+.seat.female{background:var(--female);}
+.seat.male{background:var(--male);}
+.seat.dragging{opacity:.3;cursor:grabbing;}
+
+#teacher{
+  margin:0 auto 16px;width:220px;padding:10px 0;text-align:center;
+  border:3px solid #000;border-radius:14px;background:#fff;font-weight:700;user-select:none;
+}
+
+/* 섞기 연출 */
+.scramble .seat{animation:flash .25s linear infinite;}
+@keyframes flash{0%{opacity:1}50%{opacity:.2}100%{opacity:1}}
+.spin{animation:spin .5s linear infinite;}
+@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
+
+#overlay{
+  position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+  background:rgba(0,0,0,.45);z-index:99;color:#fff;font-size:1.2rem;flex-direction:column;gap:12px;
+}
+#overlay.show{display:flex;}
+.loader{width:48px;height:48px;border:6px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin 1s linear infinite;}
+
+#toast{
+  position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+  background:#333;color:#fff;padding:8px 14px;border-radius:10px;font-size:.8rem;opacity:0;transition:opacity .3s;
+  z-index:120;
+}
+#toast.show{opacity:1;}
+
+@media(max-width:640px){
+  .desk{flex-direction:column;}
+  .seat{min-height:32px;}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <h1>4-1 자리배치 프로그램</h1>
+
+  <div class="controls">
+    <button id="btn-generate">자리 바꾸기</button>
+    <button id="btn-print">인쇄/PDF</button>
+  </div>
+
+  <div id="teacher" title="(길게 눌러 교사용 설정 열기/닫기)">교사</div>
+
+  <!-- 교사용 설정(기본 숨김: 교사 박스 길게 누르면 토글) -->
+  <div id="admin" class="hidden">
+    <fieldset>
+      <legend>교사용 설정</legend>
+      <label>남학생 목록</label>
+      <textarea id="maleBox"></textarea>
+      <label>여학생 목록</label>
+      <textarea id="femaleBox"></textarea>
+      <label>금지 쌍 (쉼표로 구분 · 줄바꿈/띄어쓰기 섞여도 됨)</label>
+      <textarea id="banPairBox"></textarea>
+      <label>같은 모둠 금지 학생(쉼표로 이름 나열)</label>
+      <textarea id="banGroupBox">이미나,김나을,한서윤</textarea>
+    </fieldset>
+  </div>
+
+  <div class="stage" id="stage"></div>
+</div>
+
+<!-- 섞기 오버레이 -->
+<div id="overlay"><div class="loader"></div><div>자리 섞는 중...</div></div>
+<div id="toast"></div>
+
+<script>
+/* ==== 기본 데이터 ==== */
+const malesDefault = ["배현준","박준후","이수현","문도하","문민찬","안로이","나예준","손호영","정도현","윤지한","손윤우","노강민"];
+const femalesDefault = ["김다연","이미나","한서윤","최유주","이윤슬","천예원","이루다","김나을","문가령","박소율","조 안","전태이"];
+
+/* 과거 짝(질문 제공) */
+const forbiddenPairsDefaultText = `
+배현준,김다연
+박준후,이미나
+이수현,한서윤
+문도하,최유주
+문민찬,이윤슬
+안로이,천예원
+나예준,이루다
+손호영,김나을
+정도현,문가령
+윤지한,박소율
+손윤우,조안
+노강민,전태이
+나예준,박소율
+노강민,김나을
+문도하,김다연
+문민찬,문가령
+박준후,이루다
+배현준,이미나
+손윤우,이윤슬
+손호영,전태이
+안로이,조안
+윤지한,천예원
+이수현,최유주
+정도현,한서윤
+박준후,천예원
+배현준,이윤슬
+문민찬,이루다
+손호영,문가령
+윤지한,전태이
+문도하,박소율
+나예준,조안
+노강민,최유주
+이수현,이미나
+손윤우,한서윤
+안로이,김나을
+정도현,김다연
+배현준,김다연
+박준후,이미나
+이수현,한서윤
+문도하,최유주
+문민찬,이윤슬
+안로이,천예원
+나예준,이루다
+손호영,김나을
+정도현,문가령
+윤지한,박소율
+손윤우,조안
+노강민,전태이
+박준후,한서윤
+정도현,천예원
+문민찬,이미나
+윤지한,이윤슬
+손윤우,김다연
+나예준,김나을
+노강민,문가령
+배현준,이루다
+안로이,전태이
+문도하,조안
+손호영,최유주
+이수현,박소율
+윤지한,이루다
+나예준,한서윤
+노강민,박소율
+박준후,최유주
+문도하,문가령
+손호영,천예원
+이수현,전태이
+문민찬,김나을
+정도현,조안
+손윤우,이미나
+나예준,김다연
+안로이,이윤슬
+`;
+
+/* 초기 레이아웃(요청 반영) — [ [male,female] ×4 ] ×3 */
+const initialLayout = [
+  [ ["박준후","최유주"], ["노강민","박소율"], ["배현준","한서윤"], ["윤지한","이루다"] ],
+  [ ["문민찬","김나을"], ["이수현","전태이"], ["손호영","천예원"], ["문도하","문가령"] ],
+  [ ["안로이","이윤슬"], ["나예준","김다연"], ["손윤우","이미나"], ["정도현","조 안"] ]
+];
+
+/* 같은 모둠(2행) 블록 */
+const groupBlocks = [
+  {b:0,r:[0,1]}, {b:0,r:[2,3]},
+  {b:1,r:[0,1]}, {b:1,r:[2,3]},
+  {b:2,r:[0,1]}, {b:2,r:[2,3]}
+];
+
+/* ==== 유틸 ==== */
+const shuffle = a => a.sort(()=>Math.random()-0.5);
+const parseList = t => t.split(/[\n,]/).map(v=>v.trim()).filter(Boolean);
+const norm = s => s.replace(/\s+/g,"").trim();
+
+/* 쉼표쌍 파서(줄바꿈/띄어쓰기 섞여도 OK) */
+function parsePairs(text){
+  const pairs=[]; 
+  const re=/([^,\n]+),([^,\n]+)/g;
+  let m;
+  while((m=re.exec(text))!==null){
+    const a=m[1].trim(), b=m[2].trim();
+    if(a&&b) pairs.push([a,b]);
+  }
+  return pairs;
+}
+
+/* 현재 화면의 짝을 DOM에서 읽어 금지쌍에 추가 */
+function getCurrentPairsFromDOM(){
+  const desks=[...document.querySelectorAll(".desk")];
+  const pairs=[];
+  desks.forEach(d=>{
+    const f = d.querySelector(".seat.female")?.textContent?.trim();
+    const m = d.querySelector(".seat.male")?.textContent?.trim();
+    if(m && f) pairs.push([m,f]);
+  });
+  return pairs;
+}
+
+/* 같은 모둠 금지 검사 */
+function validateBanGroups(layout,banG){
+  const banSet=new Set(banG);
+  for(const blk of groupBlocks){
+    const names=[];
+    for(const r of blk.r){
+      const [m,f]=layout[blk.b][r]; names.push(m,f);
+    }
+    let cnt=0; names.forEach(n=>{ if(banSet.has(n)) cnt++; });
+    if(cnt>=2) return false;
+  }
+  return true;
+}
+
+/* ==== 백트래킹(랜덤화 강화) ==== */
+function solveLayout(males, females, forbiddenPairs, banGroup){
+  if(males.length!==12 || females.length!==12) throw Error("남녀 명단이 12명씩인지 확인하세요.");
+
+  // 금지쌍(양방향·공백 무시)
+  const forbSet = new Set();
+  forbiddenPairs.forEach(([a,b])=>{
+    forbSet.add(`${norm(a)}|${norm(b)}`);
+    forbSet.add(`${norm(b)}|${norm(a)}`);
+  });
+
+  // 남학생별 허용 후보
+  const allowed = {};
+  males.forEach(m=>{
+    allowed[m] = females.filter(f => !forbSet.has(`${norm(m)}|${norm(f)}`));
+  });
+
+  // MRV + 동률 랜덤 타이브레이커
+  const order = [...males].sort((m1,m2)=>{
+    const d = allowed[m1].length - allowed[m2].length;
+    return d!==0 ? d : (Math.random()-0.5);
+  });
+
+  // 좌석 배정 순서(0..11)를 매번 랜덤
+  const seatOrder = shuffle([...Array(12).keys()]);
+  const blockId = idx => `${Math.floor(idx/4)}-${(idx%4)<2?0:1}`;
+
+  const assignment = new Array(12); // 실제 좌석 인덱스에 저장
+  const usedFem = new Set();
+
+  // 같은 모둠 금지 카운터
+  const banSet = new Set(banGroup);
+  const blockCounts = { "0-0":0,"0-1":0,"1-0":0,"1-1":0,"2-0":0,"2-1":0 };
+
+  function place(k){
+    if(k===12){
+      const layout=[[],[],[]];
+      for(let i=0;i<12;i++){
+        layout[Math.floor(i/4)].push(assignment[i]);
+      }
+      return validateBanGroups(layout, banGroup) ? layout : null;
+    }
+
+    const seatIdx = seatOrder[k];     // 이번에 채울 좌석(랜덤)
+    const m = order[k];               // 이번에 배치할 남학생
+    const candidates = shuffle([...allowed[m]]); // 후보 여학생 순서도 랜덤
+
+    for(const f of candidates){
+      if(usedFem.has(f)) continue;
+
+      // 모둠 제약 미리 체크
+      const bid=blockId(seatIdx);
+      const add = (banSet.has(m)?1:0) + (banSet.has(f)?1:0);
+      if(blockCounts[bid] + add >= 2) continue;
+
+      usedFem.add(f);
+      assignment[seatIdx]=[m,f];
+      blockCounts[bid] += add;
+
+      const res = place(k+1);
+      if(res) return res;
+
+      blockCounts[bid] -= add;
+      assignment[seatIdx]=null;
+      usedFem.delete(f);
+    }
+    return null;
+  }
+
+  const solved = place(0);
+  if(!solved) throw Error("조건을 모두 만족하는 배치를 찾지 못했습니다. (금지쌍/모둠조건을 조금 완화해 보세요)");
+  return solved;
+}
+
+/* ==== 렌더링 & 드래그 ==== */
+function makeSeat(name,sex,b,r,c){
+  const d=document.createElement("div");
+  d.className=`seat ${sex}`;d.textContent=name;
+  d.setAttribute("draggable","true");
+  d.dataset.sex=sex;d.dataset.b=b;d.dataset.r=r;d.dataset.c=c;
+  return d;
+}
+function render(layout){
+  const stage=document.getElementById("stage");stage.innerHTML="";
+  layout.forEach((rows,bIdx)=>{
+    const box=document.createElement("div");box.className="bundang";
+    box.innerHTML=`<div class="btitle">${bIdx+1}분단</div>`;
+    const grid=document.createElement("div");grid.className="grid";
+    rows.forEach(([m,f],rIdx)=>{
+      const desk=document.createElement("div");desk.className="desk";
+      // 왼쪽=여, 오른쪽=남
+      desk.appendChild(makeSeat(f,"female",bIdx,rIdx,1));
+      desk.appendChild(makeSeat(m,"male",  bIdx,rIdx,0));
+      grid.appendChild(desk);
+    });
+    box.appendChild(grid);stage.appendChild(box);
+  });
+  enableDrag();
+}
+
+/* 같은 성별끼리만 드래그 스왑 */
+function enableDrag(){
+  let dragged=null;
+  document.querySelectorAll(".seat").forEach(seat=>{
+    seat.addEventListener("dragstart",e=>{
+      dragged=seat;seat.classList.add("dragging");e.dataTransfer.effectAllowed="move";
+    });
+    seat.addEventListener("dragend",()=>seat.classList.remove("dragging"));
+    seat.addEventListener("dragover",e=>e.preventDefault());
+    seat.addEventListener("drop",e=>{
+      e.preventDefault();
+      if(!dragged||dragged===seat) return;
+      if(seat.dataset.sex!==dragged.dataset.sex) return; // 성별 다르면 무시
+      const tmp=seat.textContent;
+      seat.textContent=dragged.textContent;
+      dragged.textContent=tmp;
+      dragged=null;
+    });
+  });
+}
+
+/* ==== 섞기(연출) ==== */
+function scramble(ms=2200){
+  const stage=document.getElementById("stage");
+  const seats=[...stage.querySelectorAll(".seat")];
+  const desks=[...stage.querySelectorAll(".desk")];
+  const names=seats.map(s=>s.textContent);
+  stage.classList.add("scramble");desks.forEach(d=>d.classList.add("spin"));
+  const t=setInterval(()=>seats.forEach(s=>s.textContent=names[Math.random()*names.length|0]),120);
+  return new Promise(res=>setTimeout(()=>{clearInterval(t);stage.classList.remove("scramble");desks.forEach(d=>d.classList.remove("spin"));res();},ms));
+}
+
+/* ==== 토스트 & 교사용 패널 토글 ==== */
+function toast(msg){const t=document.getElementById("toast");t.textContent=msg;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),1800);}
+(function(){
+  const teacher=document.getElementById("teacher");let press=null;
+  teacher.addEventListener("mousedown",()=>press=setTimeout(toggleAdmin,2000));
+  teacher.addEventListener("touchstart",()=>press=setTimeout(toggleAdmin,2000));
+  ["mouseup","mouseleave","touchend","touchcancel"].forEach(ev=>teacher.addEventListener(ev,()=>clearTimeout(press)));
+})();
+function toggleAdmin(){const a=document.getElementById("admin");a.classList.toggle("hidden");toast(a.classList.contains("hidden")?"설정 닫힘":"설정 열림");}
+
+/* ==== 초기화 ==== */
+function init(){
+  maleBox.value   = malesDefault.join("\n");
+  femaleBox.value = femalesDefault.join("\n");
+  banPairBox.value= forbiddenPairsDefaultText.trim();
+
+  // 초기 화면은 제공된 자리로 표시
+  render(initialLayout);
+}
+window.addEventListener("DOMContentLoaded",()=>{
+  init();
+
+  document.getElementById("btn-generate").addEventListener("click", async ()=>{
+    const males=parseList(maleBox.value);
+    const females=parseList(femaleBox.value);
+
+    // 교사용 금지쌍 + 현재 화면 짝도 금지
+    const forbFromText=parsePairs(banPairBox.value);
+    const forbNow=getCurrentPairsFromDOM();
+    const forbAll=[...forbFromText, ...forbNow];
+
+    const banG=parseList(banGroupBox.value);
+
+    overlay.classList.add("show");
+    await scramble(2000);
+
+    try{
+      const layout = solveLayout(males,females,forbAll,banG);
+      render(layout);
+    }catch(e){
+      alert(e.message);
+    }
+    overlay.classList.remove("show");
+  });
+
+  document.getElementById("btn-print").addEventListener("click",()=>window.print());
+});
+</script>
+</body>
+</html>
