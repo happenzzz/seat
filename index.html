@@ -101,6 +101,8 @@ textarea{width:100%;min-height:70px;font-family:monospace;font-size:12px;}
       <label>금지 쌍 (쉼표로 구분 · 줄바꿈/띄어쓰기 섞여도 됨)</label>
       <textarea id="banPairBox"></textarea>
       <label>같은 모둠 금지 학생(쉼표로 이름 나열)</label>
+      <!-- 기존 3인(이미나,김나을,한서윤) + 새 3인(조 안,최유주,천예원)은
+           서로 독립 규칙으로 처리합니다. -->
       <textarea id="banGroupBox">이미나,김나을,한서윤</textarea>
     </fieldset>
   </div>
@@ -193,18 +195,23 @@ const forbiddenPairsDefaultText = `
 안로이,이윤슬
 `;
 
-/* 초기 레이아웃(요청 반영) — [ [male,female] ×4 ] ×3 */
+/* 초기 레이아웃 — [ [male,female] ×4 ] ×3 */
 const initialLayout = [
   [ ["박준후","최유주"], ["노강민","박소율"], ["배현준","한서윤"], ["윤지한","이루다"] ],
   [ ["문민찬","김나을"], ["이수현","전태이"], ["손호영","천예원"], ["문도하","문가령"] ],
   [ ["안로이","이윤슬"], ["나예준","김다연"], ["손윤우","이미나"], ["정도현","조 안"] ]
 ];
 
-/* 같은 모둠(2행) 블록 */
+/* 같은 모둠(2행) 블록 정의 */
 const groupBlocks = [
   {b:0,r:[0,1]}, {b:0,r:[2,3]},
   {b:1,r:[0,1]}, {b:1,r:[2,3]},
   {b:2,r:[0,1]}, {b:2,r:[2,3]}
+];
+
+/* ★ 추가 조건: 천예원·조 안·최유주 서로 다른 모둠(=같은 모둠에 두 명 이상 금지) */
+const extraBanGroups = [
+  ["천예원","조 안","최유주"]
 ];
 
 /* ==== 유틸 ==== */
@@ -236,22 +243,35 @@ function getCurrentPairsFromDOM(){
   return pairs;
 }
 
-/* 같은 모둠 금지 검사 */
-function validateBanGroups(layout,banG){
-  const banSet=new Set(banG);
+/* 같은 모둠 금지 검사
+   - 입력 상자(banGroupBox)의 이름 리스트는 하나의 "그룹"으로 처리
+   - extraBanGroups는 추가로 독립 그룹으로 처리
+   => 각 그룹마다 같은 모둠(2행 블록)에 2명 이상 모이면 금지 */
+function validateBanGroups(layout, banGroupFlat){
+  const groups = [];
+  if(banGroupFlat && banGroupFlat.length) groups.push(banGroupFlat);
+  groups.push(...extraBanGroups);
+
+  // 각 그룹을 정규화해 Set으로 준비
+  const groupSets = groups.map(g => new Set(g.map(norm)));
+
   for(const blk of groupBlocks){
     const names=[];
     for(const r of blk.r){
-      const [m,f]=layout[blk.b][r]; names.push(m,f);
+      const [m,f]=layout[blk.b][r];
+      names.push(norm(m), norm(f));
     }
-    let cnt=0; names.forEach(n=>{ if(banSet.has(n)) cnt++; });
-    if(cnt>=2) return false;
+    for(const gs of groupSets){
+      let cnt=0;
+      names.forEach(n=>{ if(gs.has(n)) cnt++; });
+      if(cnt>=2) return false; // 같은 그룹에서 2명 이상 모이면 금지
+    }
   }
   return true;
 }
 
 /* ==== 백트래킹(랜덤화 강화) ==== */
-function solveLayout(males, females, forbiddenPairs, banGroup){
+function solveLayout(males, females, forbiddenPairs, banGroupFlat){
   if(males.length!==12 || females.length!==12) throw Error("남녀 명단이 12명씩인지 확인하세요.");
 
   // 금지쌍(양방향·공백 무시)
@@ -280,9 +300,13 @@ function solveLayout(males, females, forbiddenPairs, banGroup){
   const assignment = new Array(12); // 실제 좌석 인덱스에 저장
   const usedFem = new Set();
 
-  // 같은 모둠 금지 카운터
-  const banSet = new Set(banGroup);
-  const blockCounts = { "0-0":0,"0-1":0,"1-0":0,"1-1":0,"2-0":0,"2-1":0 };
+  // === 같은 모둠 금지 사전 가지치기(그룹별로 카운트 추적) ===
+  const groups = [];
+  if(banGroupFlat && banGroupFlat.length) groups.push(banGroupFlat);
+  groups.push(...extraBanGroups);
+  const groupSets = groups.map(g => new Set(g.map(norm)));
+  const blockCounts = {};
+  ["0-0","0-1","1-0","1-1","2-0","2-1"].forEach(k=>blockCounts[k]=new Array(groupSets.length).fill(0));
 
   function place(k){
     if(k===12){
@@ -290,29 +314,37 @@ function solveLayout(males, females, forbiddenPairs, banGroup){
       for(let i=0;i<12;i++){
         layout[Math.floor(i/4)].push(assignment[i]);
       }
-      return validateBanGroups(layout, banGroup) ? layout : null;
+      return validateBanGroups(layout, banGroupFlat) ? layout : null;
     }
 
-    const seatIdx = seatOrder[k];     // 이번에 채울 좌석(랜덤)
-    const m = order[k];               // 이번에 배치할 남학생
-    const candidates = shuffle([...allowed[m]]); // 후보 여학생 순서도 랜덤
+    const seatIdx = seatOrder[k];
+    const m = order[k];
+    const candidates = shuffle([...allowed[m]]);
 
     for(const f of candidates){
       if(usedFem.has(f)) continue;
 
-      // 모둠 제약 미리 체크
-      const bid=blockId(seatIdx);
-      const add = (banSet.has(m)?1:0) + (banSet.has(f)?1:0);
-      if(blockCounts[bid] + add >= 2) continue;
+      // 그룹별 증가량 계산
+      const incs = groupSets.map(gs => (gs.has(norm(m))?1:0) + (gs.has(norm(f))?1:0));
+      const bid = blockId(seatIdx);
 
+      // 어떤 그룹이든 2명 이상 모이게 되면 스킵
+      let ok = true;
+      for(let gi=0; gi<incs.length; gi++){
+        if(blockCounts[bid][gi] + incs[gi] >= 2){ ok=false; break; }
+      }
+      if(!ok) continue;
+
+      // 배치
       usedFem.add(f);
       assignment[seatIdx]=[m,f];
-      blockCounts[bid] += add;
+      for(let gi=0; gi<incs.length; gi++) blockCounts[bid][gi] += incs[gi];
 
       const res = place(k+1);
       if(res) return res;
 
-      blockCounts[bid] -= add;
+      // 되돌리기
+      for(let gi=0; gi<incs.length; gi++) blockCounts[bid][gi] -= incs[gi];
       assignment[seatIdx]=null;
       usedFem.delete(f);
     }
@@ -396,12 +428,13 @@ function toggleAdmin(){const a=document.getElementById("admin");a.classList.togg
 function init(){
   maleBox.value   = malesDefault.join("\n");
   femaleBox.value = femalesDefault.join("\n");
-  banPairBox.value= forbiddenPairsDefaultText.trim();
-
-  // 초기 화면은 제공된 자리로 표시
-  render(initialLayout);
+  banPairBox.value= forbiddenPairsDefaultText.trim(); // 과거짝
+  // 기본값: 기존 3인 규칙만 입력해두고, "천예원·조 안·최유주"는 코드의 extraBanGroups로 항상 적용
+  // 필요 시 추가/수정은 여기 텍스트박스에서 하세요.
 }
 window.addEventListener("DOMContentLoaded",()=>{
+  // 초기 화면 렌더
+  render(initialLayout);
   init();
 
   document.getElementById("btn-generate").addEventListener("click", async ()=>{
@@ -413,7 +446,7 @@ window.addEventListener("DOMContentLoaded",()=>{
     const forbNow=getCurrentPairsFromDOM();
     const forbAll=[...forbFromText, ...forbNow];
 
-    const banG=parseList(banGroupBox.value);
+    const banG=parseList(banGroupBox.value); // (이미나,김나을,한서윤)
 
     overlay.classList.add("show");
     await scramble(2000);
